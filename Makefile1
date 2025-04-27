@@ -16,7 +16,7 @@ include $(DEVKITARM)/ds_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	$(shell basename $(CURDIR))
 BUILD		:=	build
-SOURCES		:=	source asm
+SOURCES		:=	arm7 arm9 pngs
 DATA		:=	data  
 INCLUDES	:=	include
 
