@@ -3,12 +3,12 @@
 //
 // As GimliDS is a port of the Frodo emulator for the DS/DSi/XL/LL handhelds,
 // any copying or distribution of this emulator, its source code and associated
-// readme files, with or without modification, are permitted per the original 
+// readme files, with or without modification, are permitted per the original
 // Frodo emulator license shown below.  Hugest thanks to Christian Bauer for his
 // efforts to provide a clean open-source emulation base for the C64.
 //
-// Numerous hacks and 'unsafe' optimizations have been performed on the original 
-// Frodo emulator codebase to get it running on the small handheld system. You 
+// Numerous hacks and 'unsafe' optimizations have been performed on the original
+// Frodo emulator codebase to get it running on the small handheld system. You
 // are strongly encouraged to seek out the official Frodo sources if you're at
 // all interested in this emulator code.
 //
@@ -65,8 +65,6 @@ uint8 myRAM1541[DRIVE_RAM_SIZE] __attribute__((section(".dtcm")));
 
 C64::C64()
 {
-    uint8 *p;
-
     // The thread is not yet running
     thread_running = false;
     quit_thyself = false;
@@ -100,12 +98,37 @@ C64::C64()
     TheIEC = TheCPU->TheIEC = new IEC(TheDisplay);
 
     // Initialize RAM with powerup pattern
-    p = RAM;
-    for (unsigned i=0; i<512; i++) {
-        for (unsigned j=0; j<64; j++)
-            *p++ = 0;
-        for (unsigned j=0; j<64; j++)
-            *p++ = 0xff;
+    // Sampled from a PAL C64 (Assy 250425) with Fujitsu MB8264A-15 DRAM chips
+    uint8_t *p = RAM;
+    for (unsigned i = 0; i < 512; ++i) {
+        for (unsigned j = 0; j < 64; ++j) {
+            if (j == 4 || j == 5) {
+                *p++ = (i & 1) ? 0x03 : 0x01;   // Unstable
+            } else if (j == 7) {
+                *p++ = 0x07;                    // Unstable
+            } else if (j == 32 || j == 57 || j == 58) {
+                *p++ = 0xff;
+            } else if (j == 55) {
+                *p++ = (i & 1) ? 0x07 : 0x05;   // Unstable
+            } else if (j == 56) {
+                *p++ = (i & 1) ? 0x2f : 0x27;
+            } else if (j == 59) {
+                *p++ = 0x10;
+            } else if (j == 60) {
+                *p++ = 0x05;
+            } else {
+                *p++ = 0x00;
+            }
+        }
+        for (unsigned j = 0; j < 64; ++j) {
+            if (j == 36) {
+                *p++ = 0xfb;
+            } else if (j == 63) {
+                *p++ = (i & 1) ? 0xff : 0x7c;   // Unstable
+            } else {
+                *p++ = 0xff;
+            }
+        }
     }
 
     // Initialize color RAM with random values
@@ -164,6 +187,7 @@ void C64::Reset(void)
     TheCIA1->Reset();
     TheCIA2->Reset();
     TheIEC->Reset();
+    TheVIC->Reset();
 }
 
 
@@ -188,7 +212,6 @@ void C64::NewPrefs(Prefs *prefs)
     PatchKernal(prefs->FastReset, prefs->TrueDrive);
     TheDisplay->NewPrefs(prefs);
 
-#ifdef __NDS__
     // Changed order of calls. If 1541 mode hasn't changed the order is insignificant.
     if (prefs->TrueDrive) {
         // New prefs have 1541 enabled ==> if old prefs had disabled free drives FIRST
@@ -199,16 +222,13 @@ void C64::NewPrefs(Prefs *prefs)
         TheJob1541->NewPrefs(prefs);
         TheIEC->NewPrefs(prefs);
     }
-#else
-    TheIEC->NewPrefs(prefs);
-    TheJob1541->NewPrefs(prefs);
-#endif
-
+    
     TheSID->NewPrefs(prefs);
 
-    // Reset 1541 processor if turned on
-    if (!ThePrefs.TrueDrive && prefs->TrueDrive)
+    // Reset 1541 processor if turned on or off (to bring IEC lines back to sane state)
+    if (ThePrefs.TrueDrive != prefs->TrueDrive) {
         TheCPU1541->AsyncReset();
+    }
 }
 
 
@@ -730,8 +750,6 @@ void Pause(uint32 ms)
 
 int frames_per_sec=0;
 
-int current_joystick=0;
-
 #ifndef HAVE_USLEEP
 
 int usleep(unsigned long int microSeconds)
@@ -779,8 +797,6 @@ void C64::Run(void)
     orig_kernal_1d84 = Kernal[0x1d84];
     orig_kernal_1d85 = Kernal[0x1d85];
     PatchKernal(ThePrefs.FastReset, ThePrefs.TrueDrive);
-
-    current_joystick = 0;
 
     quit_thyself = false;
     main_loop();
@@ -847,31 +863,28 @@ ITCM_CODE void C64::VBlank(bool draw_frame)
     TheCIA1->Joystick1 = poll_joystick(0);
     TheCIA1->Joystick2 = poll_joystick(1);
 
-    if (draw_frame)
+    frames++;
+    while (GetTicks() < (((unsigned int)TICKS_PER_SEC/(unsigned int)50) * (unsigned int)frames))
     {
-        frames++;
-        while (GetTicks() < (((unsigned int)TICKS_PER_SEC/(unsigned int)50) * (unsigned int)frames))
-        {
-            if (ThePrefs.TrueDrive && TheDisplay->led_state[0]) break; // If reading the drive in 'true drive' mode, just plow along...
-            asm("nop");
-            break;  // Uncomment this for full speed...
-        }
+        if (ThePrefs.TrueDrive && TheDisplay->led_state[0]) break; // If reading the drive in 'true drive' mode, just plow along...
+        asm("nop");
+        //break;  // Uncomment this for full speed...
+    }
 
-        frames_per_sec++;
+    frames_per_sec++;
 
-        extern u16 vBlanks;
-        if (vBlanks >= 60)
-        {
-            vBlanks = 0;
-            TheDisplay->Speedometer((int)frames_per_sec);
-            frames_per_sec = 0;
-        }
+    extern u16 vBlanks;
+    if (vBlanks >= 60)
+    {
+        vBlanks = 0;
+        TheDisplay->Speedometer((int)frames_per_sec);
+        frames_per_sec = 0;
+    }
 
-        if (frames == 50)
-        {
-            frames = 0;
-            StartTimers();
-        }
+    if (frames == 50)
+    {
+        frames = 0;
+        StartTimers();
     }
 }
 
@@ -1089,7 +1102,7 @@ uint8 C64::poll_joystick(int port)
 
     if( (keys & KEY_SELECT) && !dampen)
     {
-        current_joystick ^= 1;
+        myConfig.joyPort ^= 1;
         extern void show_joysticks();
         show_joysticks();
         dampen=30;
@@ -1105,7 +1118,7 @@ uint8 C64::poll_joystick(int port)
 
     if (!dampen)
     {
-        if(port!=current_joystick) return j;
+        if(port != myConfig.joyPort) return j;
 
         if( keys & KEY_LEFT  ) j&=0xfb;
         if( keys & KEY_RIGHT ) j&=0xf7;
@@ -1138,7 +1151,7 @@ void C64::main_loop(void)
 
         // The order of calls is important here
         int cycles = TheVIC->EmulateLine();
-        TheSID->EmulateLine(SID_CYCLES_PER_LINE);        
+        TheSID->EmulateLine(SID_CYCLES_PER_LINE);
 #if !PRECISE_CIA_CYCLES
         TheCIA1->EmulateLine(63);
         TheCIA2->EmulateLine(63);
@@ -1151,14 +1164,6 @@ void C64::main_loop(void)
 
             if (!TheCPU1541->Idle)
             {
-                // -----------------------------------------------------------------------------------------
-                // Warp speed - only draw every 10 frames to give max time to CPUs when the drive is active
-                // Note, we can't just use the Idle flag here as the drive periodically goes non-idle to
-                // check status - so we use the LED state which is a better indicator of drive activity...
-                // -----------------------------------------------------------------------------------------
-                if (TheDisplay->led_state[0]) ThePrefs.DrawEveryN = 5;
-                else ThePrefs.DrawEveryN = isDSiMode() ? 1:2;
-
                 // -----------------------------------------------------------
                 // 1541 processor active, alternately execute 6502 and 6510
                 // instructions until both have used up their cycles. This
@@ -1169,7 +1174,6 @@ void C64::main_loop(void)
             }
             else
             {
-                ThePrefs.DrawEveryN = isDSiMode() ? 1:2;
                 TheCPU->EmulateLine(cycles);
             }
         }

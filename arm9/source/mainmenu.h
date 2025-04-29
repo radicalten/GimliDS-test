@@ -1,6 +1,6 @@
 
 #define MAX_CONFIGS                 1150
-#define CONFIG_VERSION              0x0004
+#define CONFIG_VERSION              0x0005
 
 extern s16 CycleDeltas[];
 
@@ -15,7 +15,7 @@ struct __attribute__((__packed__)) Config_t
     u8  autoFire;
     u8  jitter;
     u8  diskSFX;
-    u8  reserved1;
+    u8  joyPort;
     u8  reserved2;
     u8  reserved3;
     u8  reserved4;
@@ -30,7 +30,6 @@ struct __attribute__((__packed__)) Config_t
 };
 
 extern struct Config_t  myConfig;
-
 
 #define KEY_MAP_JOY_FIRE   0
 #define KEY_MAP_SPACE      1

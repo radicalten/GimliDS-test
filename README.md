@@ -42,8 +42,8 @@ and be sure they are named exactly as follows:
 ## Emulator Use
 
 To use GimliDS you launch GimliDS.NDS on your DS/DSi/XL/LL. Please note that if you are running from an R4 card (or similar), you 
-will be running in 'Compatibility' mode that keeps the CPU at the slower 67MHz. While GimliDS will run, it must use some heavy 
-frameskip to get anywhere near full speed. If you're running from the SD card on a DSi/XL/LL with something like Twilight Menu++
+will be running in 'Compatibility' mode that keeps the CPU at the slower 67MHz. While GimliDS will run, it must use some level 
+of light frameskip to get full speed gameplay. If you're running from the SD card on a DSi/XL/LL with something like Twilight Menu++
 or Unlaunch - you will be happy to know that you are running at 134MHz and there will be no frameskip and the audio will be 
 much improved.
 
@@ -68,19 +68,47 @@ smooth scroll that back into place. That works really well for games that have a
 of the screen... you can enjoy nearly full resolution output and just occasionally hit a PAN UP/DN button to see your score. Experiment and
 have fun - just like we did in 1982!
 
+Lastly, a few games use custom loaders that require you to enable 'True Drive'. Be warned that True Drive will render the floppy driver at 
+a speed that is comparable to the original Commodore 1541 floppy drive - that is: extremely slow. It could take 2-5 minutes to load a game
+this way. But if the game requires it, that's your only option. Recommended to snap out a Save State so you don't have to repeat the loading.
+
 ## Acknowledgements
 
-  * The opening jingle was done by DeNL and comes courtesy of the roalty free jingles at pixabay
+  * The opening jingle was done by DeNL and comes courtesy of the roalty free jingles at pixabay.
   * The dwarf icon on the title screen was submitted online by 'anonymous' to an artwork site.  If this is yours and you would like to be credited, please contact me.
-  * Christian Bauer - Original Frodo author - without whom none of this exists
-  * Troy Davis(GPF) http://gpf.dcemu.co.uk - FrodoDS initial porter and others who have contributed over the years
-  * Wintermute and the contributes for devkitpro and libnds
+  * Christian Bauer - Original Frodo author - without whom none of this exists!
+  * Troy Davis(GPF) http://gpf.dcemu.co.uk - FrodoDS initial porter and others who have contributed over the years.
+  * Wintermute and the contributes for devkitpro and libnds.
+  * djleviticus for his time and efforts in helping shake out some bugs during the beta testing.
 
 ## Why GimliDS?
 
-Well - this is not enitrely the Frodo emulator. Frodo has taken many great steps forward in recent years to be more accurate and generally is a couple of full notches
-above where this port sits. My emulator is largely taken from older ports that used Frodo 4.2 as a codebase and numerous tweaks and hacks were done to get it running
-on the venerable DS hardwarwe. As such, GimliDS is a clear nod to the original emulator but also distinguishes it as a bit rough around the edges... it means well but
-can sometimes be a little short.
+Well - this is not enitrely a classic Frodo emulator but is clearly derived from those sources. Mainline Frodo has taken many great steps forward in recent years to be 
+more accurate and generally is a couple of full notches above where this port sits. My emulator is largely taken from older DS ports that used Frodo 4.2 (circa 2007) as
+a codebase and numerous tweaks and hacks were done to get it running on the venerable DS hardwarwe. I've taken that and tried to back-port some of the newer Frodo mainline
+improvements but also add my own tweaks and hacks to make it fully playable on the little handheld. As such, the GimliDS naming is a clear nod to the original emulator
+but also distinguishes it as a bit rough around the edges...
 
-More to come...
+## Original Frodo Copyright
+```
+Frodo Copyright (C) Christian Bauer
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+```
+## Change Log
+
+Version 0.8 release 27-Apr-2025 by wavemotion-dave
+  * First public beta released!
+

@@ -51,11 +51,9 @@ class C64Display {
 public:
     C64Display(C64 *the_c64);
     ~C64Display();
-    void Update(int raster, u8 *src);
+    void UpdateRasterLine(int raster, u8 *src);
     void UpdateLEDs(int l0, int l1);
     void Speedometer(int speed);
-    uint8 *BitmapBase(void);
-    int BitmapXMod(void);
     void KeyPress(int key, uint8 *key_matrix, uint8 *rev_matrix);
     void KeyRelease(int key, uint8 *key_matrix, uint8 *rev_matrix);
     void PollKeyboard(uint8 *key_matrix, uint8 *rev_matrix, uint8 *joystick);
@@ -70,6 +68,6 @@ public:
 
 // Exported functions
 extern long ShowRequester(const char *str, const char *button1, const char *button2 = NULL);
-
+extern u8 issue_commodore_key;
 
 #endif

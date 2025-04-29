@@ -39,6 +39,8 @@
 #define _VIC_H
 #include <nds.h>
 
+extern const unsigned FIRST_DISP_LINE;
+
 // Define this if you want global variables instead of member variables
 #if defined(__i386) || defined(mc68000) || defined(__MC68K__)
 #define GLOBAL_VARS
@@ -74,6 +76,7 @@ public:
     void TriggerLightpen(void);     // Trigger lightpen interrupt
     void GetState(MOS6569State *vd);
     void SetState(MOS6569State *vd);
+    void Reset(void);
 
 private:
 #ifndef GLOBAL_VARS
@@ -126,7 +129,6 @@ private:
     uint16 mc[8];               // Sprite data counters
 
     int display_idx;            // Index of current display mode
-    int skip_counter;           // Counter for frame-skipping
 
     long pad0;  // Keep buffers long-aligned
     uint8 spr_coll_buf[DISPLAY_X];  // Buffer for sprite-sprite collisions and priorities
@@ -231,6 +233,7 @@ struct MOS6569State {
     bool bad_line_enable;   // Flag: Bad Lines enabled for this frame
     bool lp_triggered;      // Flag: Lightpen was triggered in this frame
     bool border_on;         // Flag: Upper/lower border on (Frodo SC: Main border flipflop)
+    u32  total_frames;  
 
     uint16 bank_base;       // VIC bank base address
     uint16 matrix_base;     // Video matrix base

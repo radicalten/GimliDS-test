@@ -82,7 +82,7 @@
 #include "Prefs.h"
 
 // First and last displayed line
-const unsigned FIRST_DISP_LINE = 0x10;
+const unsigned FIRST_DISP_LINE = 0x20;
 const unsigned LAST_DISP_LINE = 0x110;
 
 // First and last possible line for Bad Lines
@@ -100,8 +100,7 @@ const int COL40_XSTOP = 0x160;
 const int COL38_XSTART = 0x27;
 const int COL38_XSTOP = 0x157;
 
-
-uint8 fast_line_buffer[512] __attribute__((section(".dtcm")));
+uint8 fast_line_buffer[512] __attribute__((section(".dtcm"))) = {0};
 
 // Tables for sprite X expansion
 uint16 ExpTable[256] __attribute__((section(".dtcm"))) = {
@@ -235,9 +234,6 @@ static uint32 ec_color_long             __attribute__((section(".dtcm")));    //
 static uint8 matrix_line[40]            __attribute__((section(".dtcm")));    // Buffer for video line, read in Bad Lines
 static uint8 color_line[40]             __attribute__((section(".dtcm")));    // Buffer for color line, read in Bad Lines
 
-static uint8 *chunky_line_start         __attribute__((section(".dtcm")));    // Pointer to start of current line in bitmap buffer
-static int xmod                         __attribute__((section(".dtcm")));    // Number of bytes per row
-
 static uint8 *matrix_base               __attribute__((section(".dtcm")));    // Video matrix base
 static uint8 *char_base                 __attribute__((section(".dtcm")));    // Character generator base
 static uint8 *bitmap_base               __attribute__((section(".dtcm")));    // Bitmap base
@@ -254,19 +250,21 @@ static uint16 y_scroll                  __attribute__((section(".dtcm")));
 static uint16 cia_vabase                __attribute__((section(".dtcm")));     // CIA VA14/15 video base
 
 static int display_idx                  __attribute__((section(".dtcm")));     // Index of current display mode
-static int skip_counter                 __attribute__((section(".dtcm")));     // Counter for frame-skipping
 static uint32 mc[8]                     __attribute__((section(".dtcm")));     // Sprite data counters
 static uint8 sprite_on                  __attribute__((section(".dtcm")));     // 8 Flags: Sprite display/DMA active
 
 static uint8 spr_coll_buf[DISPLAY_X]    __attribute__((section(".dtcm")));     // Buffer for sprite-sprite collisions and priorities
 static uint8 fore_mask_buf[DISPLAY_X/8] __attribute__((section(".dtcm")));     // Foreground mask for sprite-graphics collisions and priorities
 
-static bool display_state               __attribute__((section(".dtcm")));     // true: Display state, false: Idle state
-static bool border_on                   __attribute__((section(".dtcm")));     // Flag: Upper/lower border on
-static bool border_40_col               __attribute__((section(".dtcm")));     // Flag: 40 column border
-static bool frame_skipped               __attribute__((section(".dtcm")));     // Flag: Frame is being skipped
+static u8   display_state               __attribute__((section(".dtcm")));     // true: Display state, false: Idle state
+static u8   border_on                   __attribute__((section(".dtcm")));     // Flag: Upper/lower border on
+static u8   border_40_col               __attribute__((section(".dtcm")));     // Flag: 40 column border
+static u8   frame_skipped               __attribute__((section(".dtcm")));     // Flag: Frame is being skipped
 static uint8 bad_lines_enabled          __attribute__((section(".dtcm")));     // Flag: Bad Lines enabled for this frame
 static bool lp_triggered                __attribute__((section(".dtcm")));     // Flag: Lightpen was triggered in this frame
+
+static u32  total_frames                __attribute__((section(".dtcm")));     // Total frames - used for consistent frame skip on DS-Lite
+
 #endif
 
 
@@ -306,10 +304,6 @@ MOS6569::MOS6569(C64 *c64, C64Display *disp, MOS6510 *CPU, uint8 *RAM, uint8 *Ch
     char_base = RAM;
     bitmap_base = RAM;
 
-    // Get bitmap info
-    chunky_line_start = disp->BitmapBase();
-    xmod = disp->BitmapXMod();
-
     // Initialize VIC registers
     mx8 = 0;
     ctrl1 = ctrl2 = 0;
@@ -338,7 +332,7 @@ MOS6569::MOS6569(C64 *c64, C64Display *disp, MOS6510 *CPU, uint8 *RAM, uint8 *Ch
         mc[i] = 21;
 
     frame_skipped = false;
-    skip_counter = 1;
+    total_frames = 0;
 
     // Clear foreground mask
     memset(fore_mask_buf, 0, DISPLAY_X/8);
@@ -352,6 +346,20 @@ MOS6569::MOS6569(C64 *c64, C64Display *disp, MOS6510 *CPU, uint8 *RAM, uint8 *Ch
 }
 
 
+void MOS6569::Reset(void)
+{
+    display_idx = 0;
+    display_state = false;
+    border_on = false;
+    lp_triggered = false;
+
+    total_frames = 0;
+    frame_skipped = false;
+    raster_y = 0xffff;
+    
+    // Clear foreground mask
+    memset(fore_mask_buf, 0, DISPLAY_X/8);
+}
 
 
 #ifdef GLOBAL_VARS
@@ -448,6 +456,7 @@ void MOS6569::GetState(MOS6569State *vd)
     vd->ref_cnt = 0xff;
     vd->last_vic_byte = 0;
     vd->ud_border_on = border_on;
+    vd->total_frames = total_frames;
 }
 
 
@@ -537,6 +546,7 @@ void MOS6569::SetState(MOS6569State *vd)
     bad_lines_enabled = vd->bad_line_enable;
     lp_triggered = vd->lp_triggered;
     border_on = vd->border_on;
+    total_frames = vd->total_frames;
 }
 
 
@@ -841,18 +851,27 @@ inline void MOS6569::vblank(void)
     raster_y = vc_base = 0;
     lp_triggered = false;
 
-    if (!(frame_skipped = --skip_counter))
+    // Skip every other frame on DS-Lite/Phat
+    total_frames++;
+    if (isDSiMode())
     {
-        skip_counter = ThePrefs.DrawEveryN;
+         extern u8 last_led_states;
+         frame_skipped = false;
+         if (myConfig.trueDrive && last_led_states) // If True Drive and we're accessing the drive...
+         {
+             frame_skipped = (total_frames & 3); // Skip 3 of 4 frames in true drive mode when accessing drive
+         }
     }
-
+    else
+    {
+        frame_skipped = (total_frames & 1); // Skip every other...
+        if (frame_skipped)
+        {
+            if ((total_frames % 3) == 0) frame_skipped = 0; // But every so often toss in an odd frame
+        }
+    }
+    
     the_c64->VBlank(!frame_skipped);
-
-    // Get bitmap pointer for next frame. This must be done
-    // after calling the_c64->VBlank() because the preferences
-    // and screen configuration may have been changed there
-    chunky_line_start = the_display->BitmapBase();
-    xmod = the_display->BitmapXMod();
 }
 
 
@@ -1290,25 +1309,24 @@ ITCM_CODE void el_sprites(uint8 *chunky_ptr)
         }
     }
 
-    if (1) {
-
-        // Check sprite-sprite collisions
-        if (clx_spr) {
-            clx_spr |= spr_coll;
-        } else {
-            clx_spr |= spr_coll;
+    // Check sprite-sprite collisions
+    if (spr_coll) {
+        uint8_t old_clx_spr = clx_spr;
+        clx_spr |= spr_coll;
+        if (old_clx_spr == 0) { // Interrupt on first detected collision
             irq_flag |= 0x04;
             if (irq_mask & 0x04) {
                 irq_flag |= 0x80;
                 the_cpu->TriggerVICIRQ();
             }
         }
+    }
 
-        // Check sprite-background collisions
-        if (clx_bgr) {
-            clx_bgr |= gfx_coll;
-        } else {
-            clx_bgr |= gfx_coll;
+    // Check sprite-background collisions
+    if (gfx_coll) {
+        uint8_t old_clx_bgr = clx_bgr;
+        clx_bgr |= gfx_coll;
+        if (old_clx_bgr == 0) { // Interrupt on first detected collision
             irq_flag |= 0x02;
             if (irq_mask & 0x02) {
                 irq_flag |= 0x80;
@@ -1376,7 +1394,6 @@ spr_off:
  *  Emulate one raster line
  */
 
-int dampen_memcpy=0;
 int MOS6569::EmulateLine(void)
 {
     int cycles_left = 63 + CycleDeltas[myConfig.cpuCycles];    // Cycles left for CPU
@@ -1388,20 +1405,10 @@ int MOS6569::EmulateLine(void)
     // End of screen reached?
     if (raster != TOTAL_RASTERS)
     {
-        // Not end of screen... output the next scanline as it will be 'stale' and not cached...
-        if (!isDSiMode())
-        {
-            // For the DS-Lite/Phat, we copy out one pixel line buffer to the LCD
-            if (!frame_skipped)
-            {
-                the_display->Update(raster, (u8*)(chunky_line_start));
-            }
-        }
         raster_y = raster;
     }
     else  // Yes, enter vblank - new frame coming up
     {
-        dampen_memcpy++;
         vblank();
         raster = 0;
     }
@@ -1415,7 +1422,8 @@ int MOS6569::EmulateLine(void)
         bad_lines_enabled = ctrl1 & 0x10;
 
     // Skip frame? Only calculate Bad Lines then
-    if (frame_skipped) {
+    if (frame_skipped) 
+    {
         if (raster >= FIRST_DMA_LINE && raster <= LAST_DMA_LINE && ((raster & 7) == y_scroll) && bad_lines_enabled) {
             is_bad_line = true;
             cycles_left = 23 + CycleDeltas[myConfig.badCycles];
@@ -1424,17 +1432,19 @@ int MOS6569::EmulateLine(void)
     }
 
     // Within the visible range?
-    if (raster >= FIRST_DISP_LINE && raster <= LAST_DISP_LINE) {
-
+    if (raster >= FIRST_DISP_LINE && raster <= LAST_DISP_LINE) 
+    {
+        u8 bSkipDraw = 0;
         // Our output goes here
-        uint8 *chunky_ptr = chunky_line_start;
+        uint8 *chunky_ptr = fast_line_buffer;
+        uint32 *direct_scr_ptr = (uint32*)((u32)0x06000000 + (512*(raster-FIRST_DISP_LINE)));
 
         // Set video counter
         vc = vc_base;
 
         // Bad Line condition?
-        if (raster >= FIRST_DMA_LINE && raster <= LAST_DMA_LINE && ((raster & 7) == y_scroll) && bad_lines_enabled) {
-
+        if (raster >= FIRST_DMA_LINE && raster <= LAST_DMA_LINE && ((raster & 7) == y_scroll) && bad_lines_enabled)
+        {
             // Turn on display
             display_state = is_bad_line = true;
             cycles_left = 23 + CycleDeltas[myConfig.badCycles];
@@ -1459,15 +1469,14 @@ int MOS6569::EmulateLine(void)
         if (raster == dy_start && (ctrl1 & 0x10)) // Don't turn off border if DEN bit cleared
             border_on = false;
 
-        if (!border_on) {
-
+        if (!border_on) 
+        {
             // Display window contents
             uint8 *p = chunky_ptr + COL40_XSTART;       // Pointer in chunky display buffer
             uint8 *r = fore_mask_buf + COL40_XSTART/8;  // Pointer in foreground mask buffer
 #ifdef ALIGNMENT_CHECK
             uint8 *use_p = ((((int)p) & 3) == 0) ? p : text_chunky_buf;
 #endif
-
             {
                 p--;
                 uint8 b0cc = b0c_color;
@@ -1488,11 +1497,9 @@ int MOS6569::EmulateLine(void)
                             memcpy(p, use_p, 8*40);
 #else
                         if (x_scroll & 3) {
-                            if (dampen_memcpy&1)
-                            {
-                                el_std_text(text_chunky_buf, char_base + rc, r);
-                                memcpy(p, text_chunky_buf, 8*40);
-                            }
+                            el_std_text(text_chunky_buf, char_base + rc, r);
+                            // Experimentally, this is slightly faster than memcpy()
+                            u32 *dest=(u32*)p;  u32 *src=(u32*)text_chunky_buf; for (int i=0; i<80; i++) *dest++ = *src++;
                         } else
                             el_std_text(p, char_base + rc, r);
 #endif
@@ -1509,11 +1516,9 @@ int MOS6569::EmulateLine(void)
                             memcpy(p, use_p, 8*40);
 #else
                         if (x_scroll & 3) {
-                            if (dampen_memcpy&1)
-                            {
-                                el_mc_text(text_chunky_buf, char_base + rc, r);
-                                memcpy(p, text_chunky_buf, 8*40);
-                            }
+                            el_mc_text(text_chunky_buf, char_base + rc, r);
+                            // Experimentally, this is slightly faster than memcpy()
+                            u32 *dest=(u32*)p;  u32 *src=(u32*)text_chunky_buf; for (int i=0; i<80; i++) *dest++ = *src++;
                         } else
                             el_mc_text(p, char_base + rc, r);
 #endif
@@ -1530,11 +1535,9 @@ int MOS6569::EmulateLine(void)
                             memcpy(p, use_p, 8*40);
 #else
                         if (x_scroll & 3) {
-                            if (dampen_memcpy&1)
-                            {
-                                el_std_bitmap(text_chunky_buf, bitmap_base + (vc << 3) + rc, r);
-                                memcpy(p, text_chunky_buf, 8*40);
-                            }
+                            el_std_bitmap(text_chunky_buf, bitmap_base + (vc << 3) + rc, r);
+                            // Experimentally, this is slightly faster than memcpy()
+                            u32 *dest=(u32*)p;  u32 *src=(u32*)text_chunky_buf; for (int i=0; i<80; i++) *dest++ = *src++;
                         } else
                             el_std_bitmap(p, bitmap_base + (vc << 3) + rc, r);
 #endif
@@ -1551,11 +1554,9 @@ int MOS6569::EmulateLine(void)
                             memcpy(p, use_p, 8*40);
 #else
                         if (x_scroll & 3) {
-                            if (dampen_memcpy&1)
-                            {
-                                el_mc_bitmap(text_chunky_buf, bitmap_base + (vc << 3) + rc, r);
-                                memcpy(p, text_chunky_buf, 8*40);
-                            }
+                            el_mc_bitmap(text_chunky_buf, bitmap_base + (vc << 3) + rc, r);
+                            // Experimentally, this is slightly faster than memcpy()
+                            u32 *dest=(u32*)p;  u32 *src=(u32*)text_chunky_buf; for (int i=0; i<80; i++) *dest++ = *src++;
                         } else
                             el_mc_bitmap(p, bitmap_base + (vc << 3) + rc, r);
 #endif
@@ -1572,11 +1573,9 @@ int MOS6569::EmulateLine(void)
                             memcpy(p, use_p, 8*40);
 #else
                         if (x_scroll & 3) {
-                            if (dampen_memcpy&1)
-                            {
-                                el_ecm_text(text_chunky_buf, char_base + rc, r);
-                                memcpy(p, text_chunky_buf, 8*40);
-                            }
+                            el_ecm_text(text_chunky_buf, char_base + rc, r);
+                            // Experimentally, this is slightly faster than memcpy()
+                            u32 *dest=(u32*)p;  u32 *src=(u32*)text_chunky_buf; for (int i=0; i<80; i++) *dest++ = *src++;
                         } else
                             el_ecm_text(p, char_base + rc, r);
 #endif
@@ -1604,11 +1603,9 @@ int MOS6569::EmulateLine(void)
                         if (use_p != p) {memcpy(p, use_p, 8*40);}
 #else
                         if (x_scroll & 3) {
-                            if (dampen_memcpy&1)
-                            {
-                                el_std_idle(text_chunky_buf, r);
-                                memcpy(p, text_chunky_buf, 8*40);
-                            }
+                            el_std_idle(text_chunky_buf, r);
+                            // Experimentally, this is slightly faster than memcpy()
+                            u32 *dest=(u32*)p;  u32 *src=(u32*)text_chunky_buf; for (int i=0; i<80; i++) *dest++ = *src++;
                         } else
                             el_std_idle(p, r);
 #endif
@@ -1624,11 +1621,9 @@ int MOS6569::EmulateLine(void)
                         if (use_p != p) {memcpy(p, use_p, 8*40);}
 #else
                         if (x_scroll & 3) {
-                            if (dampen_memcpy&1)
-                            {
-                                el_mc_idle(text_chunky_buf, r);
-                                memcpy(p, text_chunky_buf, 8*40);
-                            }
+                            el_mc_idle(text_chunky_buf, r);
+                            // Experimentally, this is slightly faster than memcpy()
+                            u32 *dest=(u32*)p;  u32 *src=(u32*)text_chunky_buf; for (int i=0; i<80; i++) *dest++ = *src++;
                         } else
                             el_mc_idle(p, r);
 #endif
@@ -1646,8 +1641,11 @@ int MOS6569::EmulateLine(void)
 
             // Draw sprites
             // Clear sprite collision buffer - but only if we have spites to draw on this line
-            if (sprite_on) memset((uint32 *)spr_coll_buf, 0x00, sizeof(spr_coll_buf));
-            el_sprites(chunky_ptr);
+            if (sprite_on) 
+            {
+                memset((uint32 *)spr_coll_buf, 0x00, sizeof(spr_coll_buf));
+                el_sprites(chunky_ptr);
+            }
 
             // Handle left/right border
             uint32 *lp = (uint32 *)chunky_ptr + 4;
@@ -1655,28 +1653,59 @@ int MOS6569::EmulateLine(void)
             for (int i=5; i<COL40_XSTART/4; i++)
                 *++lp = c;
             lp = (uint32 *)(chunky_ptr + COL40_XSTOP) - 1;
-            for (int i=0; i<(DISPLAY_X-COL40_XSTOP)/4; i++)
+            for (int i=0; i<((DISPLAY_X-COL40_XSTOP)-16)/4; i++)
                 *++lp = c;
-            if (!border_40_col) {
-                c = ec_color;
-                p = chunky_ptr + COL40_XSTART - 1;
-                for (int i=0; i<COL38_XSTART-COL40_XSTART; i++)
-                    *++p = c;
-                p = chunky_ptr + COL38_XSTOP - 1;
-                for (int i=0; i<COL40_XSTOP-COL38_XSTOP; i++)
-                    *++p = c;
+            if (!border_40_col)
+            {
+                // Get us onto an even alignment and do 16-bits for added speed
+                u16 c16 = ec_color_long & 0xFFFF;
+                p = chunky_ptr + COL40_XSTART;
+                if ((u32)p & 1)
+                {
+                    *p++ = ec_color;
+                    u16 *p16 = (u16 *) p;
+                    *p16++ = c16;
+                    *p16++ = c16;
+                    *p16   = c16;                    
+                }
+                else
+                {
+                    u16 *p16 = (u16 *) p;
+                    *p16++ = c16;
+                    *p16++ = c16;
+                    *p16++ = c16;
+                     p = (u8 *) p16;
+                    *p = ec_color;                 
+                }
+
+                // Get us onto an even alignment and do 32-bits for added speed
+                p = chunky_ptr + COL38_XSTOP;
+                if ((u32)p & 1)
+                {
+                    *p++ = ec_color;
+                    u32 *p32 = (u32 *) p;
+                    *p32++ = c;
+                    *p32 = c;
+                }
+                else
+                {
+                    u32 *p32 = (u32 *) p;
+                    *p32++ = c;
+                    *p32++ = c;
+                     p = (u8 *) p32;
+                    *p = ec_color;                 
+                }
             }
-        } else {
-
-            // Display border
-            uint32 *lp = (uint32 *)chunky_ptr + 4;
-            uint32 c = ec_color_long;
-            for (int i=4; i<(DISPLAY_X/4)-1; i++)
-                *++lp = c;
         }
-
-        // Increment pointer in chunky buffer
-        if (isDSiMode())  chunky_line_start += xmod;
+        else 
+        {
+            // Display border - directly to screen!
+            bSkipDraw = 1;
+            direct_scr_ptr+=4;
+            uint32 c = ec_color_long;
+            for (int i=4; i<(DISPLAY_X/4)-5; i++)
+                *++direct_scr_ptr = c;
+        }
 
         // Increment row counter, go to idle state on overflow
         if (rc == 7) {
@@ -1687,7 +1716,18 @@ int MOS6569::EmulateLine(void)
 
         if (raster >= FIRST_DMA_LINE-1 && raster <= LAST_DMA_LINE-1 && (((raster+1) & 7) == y_scroll) && bad_lines_enabled)
             rc = 0;
+    
+        // Not end of screen... output the next scanline as it will be 'stale' and not cached...
+        // This also helps with tearing as we'll be outputting the 'stale' (last frame) line while the new frame is drawing.
+        if (!frame_skipped)
+        {
+            if (!bSkipDraw)
+            {
+                the_display->UpdateRasterLine(raster, (u8*)(fast_line_buffer));
+            }
+        }
     }
+    
 
 VIC_nop:
     // Skip this if all sprites are off
