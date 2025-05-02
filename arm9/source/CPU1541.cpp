@@ -93,7 +93,7 @@
 
 #include "CPU1541.h"
 #include "CPUC64.h"
-#include "1541job.h"
+#include "1541gcr.h"
 #include "C64.h"
 #include "CIA.h"
 #include "Display.h"
@@ -114,16 +114,14 @@ MOS6502_1541::MOS6502_1541(C64 *c64, Job1541 *job, C64Display *disp, uint8 *Ram,
     v_flag = d_flag = c_flag = false;
     i_flag = true;
 
+    cycle_counter = 0;
     borrowed_cycles = 0;
 
     rom = Rom - 0xC000; // So we don't have to mask the ROM when reading
-
-    via1_t1c = via1_t1l = via1_t2c = via1_t2l = 0;
-    via1_sr = 0;
-    via2_t1c = via2_t1l = via2_t2c = via2_t2l = 0;
-    via2_sr = 0;
-
+    
     Idle = false;
+
+    Reset();
 }
 
 
@@ -192,13 +190,13 @@ inline uint8 MOS6502_1541::read_byte_io(uint16 adr)
     else if ((adr & 0xfc00) == 0x1c00)  // VIA 2
         switch (adr & 0xf) {
             case 0:
-                if (the_job->SyncFound())
-                    return (via2_prb & 0x7f) | the_job->WPState();
+                if (the_job->SyncFound(cycle_counter))
+                    return (via2_prb & 0x7f) | (the_job->WPSensorClosed(cycle_counter) ? 0x10:0x00);
                 else
-                    return (via2_prb | 0x80) | the_job->WPState();
+                    return (via2_prb | 0x80) | (the_job->WPSensorClosed(cycle_counter) ? 0x10:0x00);
             case 1:
             case 15:
-                return the_job->ReadGCRByte();
+                return the_job->ReadGCRByte(cycle_counter);
             case 2:
                 return via2_ddrb;
             case 3:
@@ -571,6 +569,8 @@ void MOS6502_1541::GetState(MOS6502State *s)
     s->via2_sr = via2_sr;
     s->via2_acr = via2_acr; s->via2_pcr = via2_pcr;
     s->via2_ifr = via2_ifr; s->via2_ier = via2_ier;
+    
+    s->cycle_counter = cycle_counter;
 }
 
 
@@ -614,6 +614,8 @@ void MOS6502_1541::SetState(MOS6502State *s)
     via2_sr = s->via2_sr;
     via2_acr = s->via2_acr; via2_pcr = s->via2_pcr;
     via2_ifr = s->via2_ifr; via2_ier = s->via2_ier;
+    
+    cycle_counter = s->cycle_counter;
 }
 
 
@@ -629,14 +631,22 @@ void MOS6502_1541::Reset(void)
     IECLines = 0xc0;
 
     via1_pra = via1_ddra = via1_prb = via1_ddrb = 0;
+    via1_t1c = via1_t1l = via1_t2c = via1_t2l = 0xffff;
+    via1_sr = 0;    
     via1_acr = via1_pcr = 0;
     via1_ifr = via1_ier = 0;
+    
+    via2_t1c = via2_t1l = via2_t2c = via2_t2l = 0xffff;
+    via2_sr = 0;    
     via2_pra = via2_ddra = via2_prb = via2_ddrb = 0;
     via2_acr = via2_pcr = 0;
     via2_ifr = via2_ier = 0;
 
     // Clear all interrupt lines
     interrupt.intr_any = 0;
+    
+    cycle_counter = 0;
+    borrowed_cycles = 0;
 
     // Read reset vector
     jump(read_word(0xfffc));
@@ -683,7 +693,7 @@ void MOS6502_1541::illegal_op(uint8 op, uint16 at)
 // Push processor flags onto the stack
 #define push_flags(b_flag) \
     tmp = 0x20 | (n_flag & 0x80); \
-    if (((via2_pcr & 0x0e) == 0x0e) && the_job->ByteReady()) v_flag = true; \
+    if (((via2_pcr & 0x0e) == 0x0e) && the_job->ByteReady(cycle_counter)) v_flag = true; \
     if (v_flag) tmp |= 0x40; \
     if (b_flag) tmp |= 0x10; \
     if (d_flag) tmp |= 0x08; \
@@ -746,11 +756,7 @@ handle_int:
     }
 
 #define IS_CPU_1541
-#undef PRECISE_CPU_CYCLES
-#define PRECISE_CPU_CYCLES 0
 #include "CPU_emulline.h"
-#undef PRECISE_CPU_CYCLES
-#define PRECISE_CPU_CYCLES 1
 
     return last_cycles;
 }

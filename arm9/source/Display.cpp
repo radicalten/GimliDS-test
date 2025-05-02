@@ -48,6 +48,7 @@
 
 
 u8 floppy_sound_counter = 0;
+u8 bDebugDisplay = 0;
 
 // "Colodore" palette
 uint8_t palette_red[16] = {
@@ -261,8 +262,8 @@ u16 vBlanks;
 void vblankIntr(void)
 {
     vBlanks++;
-    int cxBG = (myConfig.offsetX << 8);
-    int cyBG = (myConfig.offsetY+temp_offset) << 8;
+    int cxBG = ((s16)myConfig.offsetX << 8);
+    int cyBG = ((s16)myConfig.offsetY+temp_offset) << 8;
     int xdxBG = ((320 / myConfig.scaleX) << 8) | (320 % myConfig.scaleX) ;
     int ydyBG = ((200 / myConfig.scaleY) << 8) | (200 % myConfig.scaleY);
 
@@ -445,19 +446,41 @@ void show_shift_key(void)
     }
 }
 
+extern u8 *fake_heap_end;     // current heap start
+extern u8 *fake_heap_start;   // current heap end
+
+u8* getHeapStart() {return fake_heap_start;}
+u8* getHeapEnd()   {return (u8*)sbrk(0);}
+u8* getHeapLimit() {return fake_heap_end;}
+
+int getMemUsed() { // returns the amount of used memory in bytes
+   struct mallinfo mi = mallinfo();
+   return mi.uordblks;
+}
+
+int getMemFree() { // returns the amount of free memory in bytes
+   struct mallinfo mi = mallinfo();
+   return mi.fordblks + (getHeapLimit() - getHeapEnd());
+}
+
+
 int i = 0;
 int debug[8]={0,0,0,0,0,0,0,0};
 void C64Display::Speedometer(int speed)
 {
-#if 0
     char tmp[34];
 
-    sprintf(tmp, "%-8d", speed);
-    DSPrint(19, 1, 6, tmp);
+    if (bDebugDisplay)
+    {
+        debug[0] = getMemUsed();
+        debug[1] = getMemFree();
+        
+        sprintf(tmp, "%-8d", speed);
+        DSPrint(19, 1, 6, tmp);
 
-    sprintf(tmp, "%-8d %-8d %-6d %-6d", debug[0],debug[1],debug[2],debug[3]);
-    DSPrint(0, 0, 6, tmp);
-#endif
+        sprintf(tmp, "%-8d %-8d %-6d %-6d", debug[0],debug[1],debug[2],debug[3]);
+        DSPrint(0, 0, 6, tmp);
+    }
 
     show_joysticks();
     show_shift_key();
@@ -507,6 +530,13 @@ int lastc64key=-1;
 bool m_tpActive=false;
 touchPosition m_tp;
 u8 issue_commodore_key = 0;
+
+void C64Display::IssueKeypress(uint8 row, uint8 col, uint8 *key_matrix, uint8 *rev_matrix)
+{
+    c64_key = MATRIX(row,col);
+    KeyPress(c64_key, key_matrix, rev_matrix);
+    lastc64key=c64_key;
+}
 
 void C64Display::PollKeyboard(uint8 *key_matrix, uint8 *rev_matrix, uint8 *joystick)
 {
